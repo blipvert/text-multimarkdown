@@ -383,6 +383,16 @@ sub _GenerateHeader {
     return "<h$level$label>$header</h$level>\n\n";
 }
 
+sub _DoLists {
+    my ($self, $text) = @_;
+
+    $text = $self->_DoDefinitionLists($text);
+
+    $text = $self->SUPER::_DoLists($text);
+
+    return $text;
+}
+
 # Protect Wiki Links in Code Blocks (if wiki links are turned on), then delegate to super class.
 sub _EncodeCode {
     my ($self, $text) = @_;
@@ -1215,6 +1225,82 @@ sub _PrintMarkdownBibliography {
     }
 
     return $result;
+}
+
+sub _DoDefinitionLists {
+    # Uses the syntax proposed by Michel Fortin in PHP Markdown Extra
+    
+    my ($self, $text) = @_;
+
+    my $tab_width = $self->{tab_width};
+    my $less_than_tab = $tab_width -1;
+    
+    my $line_start = qr{
+		[ ]{0,$less_than_tab}
+	}mx;
+    
+    my $term = qr{
+		$line_start
+		[^:\s][^\n]*\n
+	}sx;
+    
+    my $definition = qr{
+		\n?[ ]{0,$less_than_tab}
+		\:[ \t]+(.*?)\n
+		((?=\n?\:)|\n|\Z)	# Lookahead for next definition, two returns,
+							# or the end of the document
+	}sx;
+    
+    my $definition_block = qr{
+		((?:$term)+)				# $1 = one or more terms
+		((?:$definition)+)			# $2 = by one or more definitions
+	}sx;
+    
+    my $definition_list = qr{
+		(?:$definition_block\n*)+		# One ore more definition blocks
+	}sx;
+    
+    $text =~ s{
+		($definition_list)			# $1 = the whole list
+	}{
+	    my $list = $1;
+	    my $result = $1;
+	    
+	    $list =~ s{
+			(?:$definition_block)\n*
+		}{
+		    my $terms = $1;
+		    my $defs = $2;
+
+		    $terms =~ s{
+				[ ]{0,$less_than_tab}
+				(.*)
+				\s*
+			}{
+			    my $term = $1;
+			    my $result = "";
+			    $term =~ s/^\s*(.*?)\s*$/$1/;
+			    if ($term !~ /^\s*$/){
+				$result = "<dt>" . $self->_RunSpanGamut($1) . "</dt>\n";
+			    }
+			    $result;
+		    }xmge;
+		    
+		    $defs =~ s{
+				$definition
+			}{
+			    my $def = $1 . "\n";
+			    $def =~ s/^[ ]{0,$tab_width}//gm;
+			    "<dd>\n" . $self->_RunBlockGamut($def) . "\n</dd>\n";
+		    }xsge;
+		    
+		    $terms . $defs . "\n";
+	    }xsge;
+	    
+	    "<dl>\n" . $list . "</dl>\n\n";
+    }xsge;
+    
+    return $text
 }
 
 1;
