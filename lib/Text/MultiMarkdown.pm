@@ -119,6 +119,12 @@ The title of the generated bibliography, defaults to 'Bibliography'.
 
 Controls indent width in the generated markup, defaults to 4
 
+=item heading_shift
+
+Number added to X for each <hX> tag generated; useful for aggregating
+documents in an HTML-compliant manner within a container document,
+without needing to change source markup.  Defaults to 0.
+
 =item disable_tables
 
 If true, this disables the MultiMarkdown table handling.
@@ -208,6 +214,8 @@ sub new {
     $p{base_url} ||= ''; # This is the base url to be used for WikiLinks
 
     $p{tab_width} = 4 unless (defined $p{tab_width} and $p{tab_width} =~ m/^\d+$/);
+
+    $p{heading_shift} = 0 unless (defined $p{heading_shift} and $p{heading_shift} =~ m/^\d+$/);
 
     $p{document_format} ||= '';
 
@@ -373,6 +381,8 @@ sub _GenerateHeader {
 
     my $label = $self->{heading_ids} ? $self->_Header2Label($id) : '';
     my $header = $self->_RunSpanGamut($id);
+
+    $level += $self->{heading_shift};
 
     if ($label ne '') {
         $self->{_crossrefs}{$label} = "#$label";
