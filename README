@@ -107,6 +107,9 @@ OPTIONS
         If true, this disables the MultiMarkdown bibliography/citation
         handling.
 
+    disable_definition_lists
+        If true, this disables the MultiMarkdown definition list handling.
+
     A number of possible items of metadata can also be supplied as options.
     Note that if the use_metadata is true then the metadata in the document
     will overwrite the settings on command line.
@@ -116,6 +119,7 @@ OPTIONS
     document_format
     use_wikilinks
     base_url
+    self_url - The document url is prepended to the "#" anchor of footnotes.
 
 METADATA
     MultiMarkdown supports the concept of 'metadata', which allows you to

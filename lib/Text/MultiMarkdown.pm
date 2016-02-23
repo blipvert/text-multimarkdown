@@ -4,12 +4,13 @@ use strict;
 use warnings;
 use re 'eval';
 
-use Digest::MD5 qw(md5_hex);
-use Encode      qw();
-use Carp        qw(croak);
-use base        qw(Text::Markdown);
+use Digest::MD5    qw(md5_hex);
+use Encode         qw();
+use Carp           qw(croak);
+use base           qw(Text::Markdown);
+use HTML::Entities qw(encode_entities);
 
-our $VERSION   = '1.000033'; # 1.0.33
+our $VERSION   = '1.000035'; # 1.0.34
 $VERSION = eval $VERSION;
 our @EXPORT_OK = qw(markdown);
 
@@ -53,7 +54,7 @@ specifically to serve as a front-end to (X)HTML. You can use span-level
 HTML tags anywhere in a Markdown document, and you can use block level
 HTML tags (C<< <div> >>, C<< <table> >> etc.). Note that by default
 Markdown isn't interpreted in HTML block-level elements, unless you add
-a C<markdown=1"> attribute to the element. See L<Text::Markdown> for 
+a C<markdown=1"> attribute to the element. See L<Text::Markdown> for
 details.
 
 This module implements the MultiMarkdown markdown syntax extensions from:
@@ -137,6 +138,10 @@ If true, this disables the MultiMarkdown footnotes handling.
 
 If true, this disables the MultiMarkdown bibliography/citation handling.
 
+=item disable_definition_lists
+
+If true, this disables the MultiMarkdown definition list handling.
+
 =back
 
 A number of possible items of metadata can also be supplied as options.
@@ -151,6 +156,8 @@ Metadata options supported are:
 =item use_wikilinks
 
 =item base_url
+
+=item self_url - The document url is prepended to the "#" anchor of footnotes.
 
 =back
 
@@ -231,6 +238,8 @@ sub new {
     $p{img_ids}     = defined $p{img_ids}     ? $p{img_ids}     : 1;
 
     $p{bibliography_title} ||= 'Bibliography'; # FIXME - Test and document, can also be in metadata!
+
+    $p{self_url} ||= ''; # Used in footnotes to prepend anchors
 
     my $self = { params => \%p };
     bless $self, ref($class) || $class;
@@ -373,6 +382,87 @@ sub _DoHeaders {
     $text = $self->_DoTables($text);
 }
 
+sub _DoLists {
+    my ($self, $text) = @_;
+    $text = $self->_DoDefinitionLists($text)
+        unless $self->{disable_definition_lists};
+    $self->SUPER::_DoLists($text);
+}
+
+sub _DoDefinitionLists {
+    my ($self, $text) = @_;
+	# Uses the syntax proposed by Michel Fortin in PHP Markdown Extra
+
+	my $less_than_tab = $self->{tab_width} -1;
+
+	my $line_start = qr{
+		[ ]{0,$less_than_tab}
+	}mx;
+
+	my $term = qr{
+		$line_start
+		[^:\s][^\n]*\n
+	}sx;
+
+	my $definition = qr{
+		\n?[ ]{0,$less_than_tab}
+		\:[ \t]+(.*?)\n
+		((?=\n?\:)|\n|\Z)	# Lookahead for next definition, two returns,
+							# or the end of the document
+	}sx;
+
+	my $definition_block = qr{
+		((?:$term)+)				# $1 = one or more terms
+		((?:$definition)+)			# $2 = by one or more definitions
+	}sx;
+
+	my $definition_list = qr{
+		(?:$definition_block\n*)+		# One ore more definition blocks
+	}sx;
+
+	$text =~ s{
+		($definition_list)			# $1 = the whole list
+	}{
+		my $list = $1;
+		my $result = $1;
+		
+		$list =~ s{
+			(?:$definition_block)\n*
+		}{
+			my $terms = $1;
+			my $defs = $2;
+
+			$terms =~ s{
+				[ ]{0,$less_than_tab}
+				(.*)
+				\s*
+			}{
+				my $term = $1;
+				my $result = "";
+				$term =~ s/^\s*(.*?)\s*$/$1/;
+				if ($term !~ /^\s*$/){
+					$result = "<dt>" . $self->_RunSpanGamut($1) . "</dt>\n";
+				}
+				$result;
+			}xmge;
+
+			$defs =~ s{
+				$definition
+			}{
+				my $def = $1 . "\n";
+				$def =~ s/^[ ]{0,$self->{tab_width}}//gm;
+				"<dd>\n" . $self->_RunBlockGamut($def) . "\n</dd>\n";
+			}xsge;
+
+			$terms . $defs . "\n";
+		}xsge;
+
+		"<dl>\n" . $list . "</dl>\n\n";
+	}xsge;
+
+	return $text
+}
+
 # Generating headers automatically generates X-refs in MultiMarkdown (always)
 # Also, by default, you get id attributes added to your headers, you can turn this
 # part of the MultiMarkdown behaviour off with the heading_ids flag.
@@ -391,16 +481,6 @@ sub _GenerateHeader {
     }
 
     return "<h$level$label>$header</h$level>\n\n";
-}
-
-sub _DoLists {
-    my ($self, $text) = @_;
-
-    $text = $self->_DoDefinitionLists($text);
-
-    $text = $self->SUPER::_DoLists($text);
-
-    return $text;
 }
 
 # Protect Wiki Links in Code Blocks (if wiki links are turned on), then delegate to super class.
@@ -692,10 +772,10 @@ sub _DoFootnotes {
         if (defined $self->{_footnotes}{$id} ) {
             $footnote_counter++;
             if ($self->{_footnotes}{$id} =~ /^glossary:/i) {
-                $result = qq{<a href="#fn:$id" id="fnref:$id" class="footnote glossary">$footnote_counter</a>};
+                $result = qq{<a href="$self->{self_url}#fn:$id" id="fnref:$id" class="footnote glossary">$footnote_counter</a>};
             }
             else {
-                $result = qq{<a href="#fn:$id" id="fnref:$id" class="footnote">$footnote_counter</a>};
+                $result = qq{<a href="$self->{self_url}#fn:$id" id="fnref:$id" class="footnote">$footnote_counter</a>};
             }
             push (@{ $self->{_used_footnotes} }, $id);
         }
@@ -745,10 +825,10 @@ sub _PrintFootnotes {
                 $glossary . q{:<p>};
             }egsx;
 
-            $result .= qq{<li id="fn:$id">$footnote<a href="#fnref:$id" class="reversefootnote">&#160;&#8617;</a>$footnote_closing_tag</li>\n\n};
+            $result .= qq{<li id="fn:$id">$footnote<a href="$self->{self_url}#fnref:$id" class="reversefootnote">&#160;&#8617;</a>$footnote_closing_tag</li>\n\n};
         }
         else {
-            $result .= qq{<li id="fn:$id">$footnote<a href="#fnref:$id" class="reversefootnote">&#160;&#8617;</a>$footnote_closing_tag</li>\n\n};
+            $result .= qq{<li id="fn:$id">$footnote<a href="$self->{self_url}#fnref:$id" class="reversefootnote">&#160;&#8617;</a>$footnote_closing_tag</li>\n\n};
         }
     }
 
@@ -792,7 +872,7 @@ sub _xhtmlMetaData {
 
     foreach my $key (sort keys %{$self->{_metadata}} ) {
         if (lc($key) eq "title") {
-            $result.= "\t\t<title>$self->{_metadata}{$key}</title>\n";
+            $result.= "\t\t<title>" . encode_entities($self->{_metadata}{$key}) . "</title>\n";
         }
         elsif (lc($key) eq "css") {
             $result.= qq[\t\t<link type="text/css" rel="stylesheet" href="$self->{_metadata}{$key}"$self->{empty_element_suffix}\n];
@@ -801,7 +881,8 @@ sub _xhtmlMetaData {
 			$result .= qq[\t\t$self->{_metadata}{$key}\n]
 		}
         else {
-            $result.= qq[\t\t<meta name="$key" content="$self->{_metadata}{$key}"$self->{empty_element_suffix}\n];
+            $result.= qq[\t\t<meta name="] . encode_entities($key) . qq[" ]
+                . qq[content="] . encode_entities($self->{_metadata}{$key}) . qq["$self->{empty_element_suffix}\n];
         }
     }
     $result.= "\t</head>\n";
@@ -1235,82 +1316,6 @@ sub _PrintMarkdownBibliography {
     }
 
     return $result;
-}
-
-sub _DoDefinitionLists {
-    # Uses the syntax proposed by Michel Fortin in PHP Markdown Extra
-    
-    my ($self, $text) = @_;
-
-    my $tab_width = $self->{tab_width};
-    my $less_than_tab = $tab_width -1;
-    
-    my $line_start = qr{
-		[ ]{0,$less_than_tab}
-	}mx;
-    
-    my $term = qr{
-		$line_start
-		[^:\s][^\n]*\n
-	}sx;
-    
-    my $definition = qr{
-		\n?[ ]{0,$less_than_tab}
-		\:[ \t]+(.*?)\n
-		((?=\n?\:)|\n|\Z)	# Lookahead for next definition, two returns,
-							# or the end of the document
-	}sx;
-    
-    my $definition_block = qr{
-		((?:$term)+)				# $1 = one or more terms
-		((?:$definition)+)			# $2 = by one or more definitions
-	}sx;
-    
-    my $definition_list = qr{
-		(?:$definition_block\n*)+		# One ore more definition blocks
-	}sx;
-    
-    $text =~ s{
-		($definition_list)			# $1 = the whole list
-	}{
-	    my $list = $1;
-	    my $result = $1;
-	    
-	    $list =~ s{
-			(?:$definition_block)\n*
-		}{
-		    my $terms = $1;
-		    my $defs = $2;
-
-		    $terms =~ s{
-				[ ]{0,$less_than_tab}
-				(.*)
-				\s*
-			}{
-			    my $term = $1;
-			    my $result = "";
-			    $term =~ s/^\s*(.*?)\s*$/$1/;
-			    if ($term !~ /^\s*$/){
-				$result = "<dt>" . $self->_RunSpanGamut($1) . "</dt>\n";
-			    }
-			    $result;
-		    }xmge;
-		    
-		    $defs =~ s{
-				$definition
-			}{
-			    my $def = $1 . "\n";
-			    $def =~ s/^[ ]{0,$tab_width}//gm;
-			    "<dd>\n" . $self->_RunBlockGamut($def) . "\n</dd>\n";
-		    }xsge;
-		    
-		    $terms . $defs . "\n";
-	    }xsge;
-	    
-	    "<dl>\n" . $list . "</dl>\n\n";
-    }xsge;
-    
-    return $text
 }
 
 1;
